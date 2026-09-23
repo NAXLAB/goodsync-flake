@@ -57,8 +57,6 @@ environment.systemPackages = [
 ];
 ```
 
-Either way, `nixpkgs.config.allowUnfreePredicate` (or `allowUnfree = true;`) needs to cover `goodsync` somewhere in your config, or the build refuses to proceed.
-
 ### Running it
 
 ```console
@@ -79,27 +77,6 @@ systemd.user.services.goodsync-server = {
   };
 };
 ```
-
-## Updating to a new GoodSync version
-
-1. Check the current version at [goodsync.com/for-linux](https://www.goodsync.com/for-linux) and bump `version` in `package.nix`.
-2. Re-fetch the hash, since the `.deb` at that URL changes with each release:
-   ```console
-   $ nix-prefetch-url https://www.goodsync.com/download/goodsync.x86_64.deb
-   $ nix hash convert --to sri --type sha256 <hash-from-above>
-   ```
-3. Paste the result into `src.hash` in `package.nix`.
-4. `nix build .#goodsync -L` and fix up `buildInputs` if `autoPatchelfHook` reports anything new as missing.
-
-## Troubleshooting
-
-**`auto-patchelf could not satisfy dependency foo.so.N`** — add the nixpkgs package providing that library to `buildInputs` in `package.nix`. `nix-locate <libname.so>` (from `nix-index`) or search.nixos.org will tell you which package to use.
-
-**GoodSync looks for config/state under `/etc` or another path Nix can't write to** — check with:
-```console
-$ strace -f -e trace=openat $(nix build .#goodsync --no-link --print-out-paths)/bin/goodsync 2>&1 | grep ENOENT
-```
-If it's hardcoding a system path rather than respecting `$HOME`, you may need to `wrapProgram` an env var it accepts, or fall back to `pkgs.buildFHSEnv` instead of `autoPatchelfHook` — a heavier but more forgiving approach for binaries that assume a full Debian-like filesystem.
 
 ## Repo layout
 
