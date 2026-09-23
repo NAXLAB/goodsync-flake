@@ -7,6 +7,8 @@
 , makeDesktopItem
 , libxcrypt-legacy
 , xdg-utils
+, bash
+, coreutils
 }:
 
 stdenv.mkDerivation (finalAttrs: {
@@ -60,7 +62,8 @@ stdenv.mkDerivation (finalAttrs: {
     install -Dm644 en-english.rfs $out/bin/en-english.rfs
 
     # Resources for gs-server (/resources=...). The cert/key are required at
-    # startup; the server runs fine with this directory read-only.
+    # startup; the module copies this out of the store at runtime since the
+    # Job Server writes its own job-server.key alongside them.
     mkdir -p $out/share/goodsync-server
     cp -r html-templates web-res gs-server.crt gs-server.key \
       $out/share/goodsync-server/
@@ -76,8 +79,35 @@ stdenv.mkDerivation (finalAttrs: {
       --prefix PATH : ${lib.makeBinPath [ xdg-utils ]}
 
     # The Debian package ships a `goodsync` command; it is just `gsync /gsweb`
-    # (start the Web UI and open the browser).
-    makeWrapper $out/bin/gsync $out/bin/goodsync --add-flags /gsweb
+    # (start the Web UI and open the browser). But gsync's own "am I on a
+    # GUI session" check doesn't succeed in every environment (e.g. no X
+    # libs detected), so instead of opening a browser it just prints the Web
+    # UI URLs and does nothing further -- one URL per bound interface,
+    # including Docker's default bridge (172.17.0.1) if present.
+    #
+    # So `goodsync` itself is a small wrapper: stream gsweb's output through
+    # unchanged (so you still see everything gsync normally prints), but
+    # also watch for the first non-Docker https://.../web-ui URL and open it
+    # with xdg-open ourselves.
+    cat > $out/bin/.goodsync-wrapped <<'GOODSYNC_EOF'
+#!${bash}/bin/bash
+set -euo pipefail
+opened=0
+${coreutils}/bin/stdbuf -oL "$GOODSYNC_GSYNC" /gsweb | while IFS= read -r line; do
+  echo "$line"
+  if [ "$opened" -eq 0 ] && [[ "$line" =~ https://([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):[0-9]+/web-ui ]]; then
+    ip="''${BASH_REMATCH[1]}"
+    if [ "$ip" != "172.17.0.1" ]; then
+      xdg-open "$line" >/dev/null 2>&1 &
+      opened=1
+    fi
+  fi
+done
+GOODSYNC_EOF
+    chmod +x $out/bin/.goodsync-wrapped
+    makeWrapper $out/bin/.goodsync-wrapped $out/bin/goodsync \
+      --prefix PATH : ${lib.makeBinPath [ xdg-utils ]} \
+      --set GOODSYNC_GSYNC $out/bin/gsync
   '';
 
   desktopItems = [
