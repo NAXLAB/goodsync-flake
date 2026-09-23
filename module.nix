@@ -11,7 +11,8 @@ let
   setupDirs = pkgs.writeShellScript "goodsync-server-setup-dirs" ''
     set -eu
     mkdir -p ${profile} ${resources}
-    chown ${cfg.user}:${group} ${profileTop} ${profile} ${resources}
+    cp -r ${cfg.package}/share/goodsync-server/. ${resources}/
+    chown -R ${cfg.user}:${group} ${profileTop} ${profile} ${resources}
     chmod 0775 ${profileTop} ${profile} ${resources}
   '';
 
