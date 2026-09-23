@@ -19,7 +19,6 @@
 stdenv.mkDerivation (finalAttrs: {
   pname = "goodsync";
   # Check https://www.goodsync.com/for-linux for the current version and
-  # bump this to match — the .deb URL itself is version-agnostic.
   version = "12.9.29";
 
   src = fetchurl {
