@@ -63,6 +63,11 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+
+    # gs-server internally does getgrnam(cfg.user) to de-elevate; NixOS doesn't
+    # create a same-named group by default, so ensure one exists.
+    users.groups.${cfg.user} = lib.mkDefault {};
+
     # Gives you the `goodsync` / `gsync` commands and the desktop entry.
     environment.systemPackages = [ cfg.package ];
 
