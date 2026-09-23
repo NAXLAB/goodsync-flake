@@ -3,43 +3,39 @@
 let
   cfg = config.services.goodsync;
 
-  # gsync hardcodes /etc/goodsync/server, so the layout has to match the
-  # vendor installer (this is the "server profile not found" error).
   profileTop = "/etc/goodsync";
   profile = "${profileTop}/server";
+  resources = "${profileTop}/resources";
   group = config.users.users.${cfg.user}.group;
 
-  # Runs as root: create the profile dirs with the right owner.
   setupDirs = pkgs.writeShellScript "goodsync-server-setup-dirs" ''
     set -eu
-    mkdir -p ${profile}
-    chown ${cfg.user}:${group} ${profileTop} ${profile}
-    chmod 0775 ${profileTop} ${profile}
+    mkdir -p ${profile} ${resources}
+    chown ${cfg.user}:${group} ${profileTop} ${profile} ${resources}
+    chmod 0775 ${profileTop} ${profile} ${resources}
   '';
 
-  # Runs as cfg.user, same as the installer does after "Copying server
-  # configuration files".
   prepare = pkgs.writeShellScript "goodsync-server-prepare" ''
     set -eu
 
-    # Local server user, needed by `gsync /gsweb`. Only generate it once so
-    # restarts don't rotate it. gsync also drops client state in $HOME, so
-    # point that at a throwaway dir like the installer does.
     if [ ! -e ${profile}/users.tix ]; then
       home=$(mktemp -d)
       HOME="$home" ${cfg.package}/bin/gsync /generate-local-server-user ${profile}
       rm -rf "$home"
     fi
 
-    # The self-updater can't do anything useful in the read-only Nix store.
-    # settings.tix is created by gs-server on its first start, so this takes
-    # effect from the second start onwards.
     if [ -e ${profile}/settings.tix ]; then
       sed -i \
         -e 's/^CheckNewVersion[[:blank:]]*=.*/CheckNewVersion = No/' \
         -e 's/^InstallNewVersion[[:blank:]]*=.*/InstallNewVersion = No/' \
         ${profile}/settings.tix
     fi
+
+    # Refresh static resources (web assets, vendor certs) from the package on
+    # every start, so upgrades take effect. cp never deletes, so this never
+    # touches job-server.key, which the Job Server generates into this same
+    # directory at runtime and which isn't part of the package's own tree.
+    cp -r ${cfg.package}/share/goodsync-server/. ${resources}/
   '';
 in
 {
@@ -85,7 +81,7 @@ in
         Group = cfg.user;
         # "+" = run this one as root regardless of User=
         ExecStartPre = [ "+${setupDirs}" "${prepare}" ];
-        ExecStart = "${cfg.package}/bin/gs-server /profile=${profile} /resources=${cfg.package}/share/goodsync-server";
+        ExecStart = "${cfg.package}/bin/gs-server /profile=${profile} /resources=${resources}";
         Restart = "on-failure";
         RestartSec = 20;
       };
