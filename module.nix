@@ -32,11 +32,6 @@ let
         ${profile}/settings.tix
     fi
 
-    # Refresh static resources (web assets, vendor certs) from the package on
-    # every start, so upgrades take effect. cp never deletes, so this never
-    # touches job-server.key, which the Job Server generates into this same
-    # directory at runtime and which isn't part of the package's own tree.
-    cp -r ${cfg.package}/share/goodsync-server/. ${resources}/
   '';
 in
 {
