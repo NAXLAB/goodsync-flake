@@ -7,7 +7,7 @@
   };
 
   outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+    flake-utils.lib.eachSystem [ "x86_64-linux" ] (system:
       let
         pkgs = import nixpkgs {
           inherit system;
@@ -22,6 +22,14 @@
     ) // {
       overlays.default = final: prev: {
         goodsync = final.callPackage ./package.nix { };
+      };
+
+      # Defaults services.goodsync.package to this flake's own build, so the
+      # unfree exception above applies and you don't need to allow it yourself.
+      nixosModules.default = { lib, pkgs, ... }: {
+        imports = [ ./module.nix ];
+        services.goodsync.package = lib.mkDefault
+          self.packages.${pkgs.stdenv.hostPlatform.system}.default;
       };
     };
 }

@@ -1,103 +1,100 @@
 { lib
 , stdenv
 , fetchurl
-, dpkg
 , autoPatchelfHook
 , makeWrapper
-, openssl
-, zlib
-, curl
+, copyDesktopItems
+, makeDesktopItem
 , libxcrypt-legacy
 , xdg-utils
-, coreutils
-, gnused
-, gnugrep
-, procps
-, iproute2
 }:
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "goodsync";
-  # Check https://www.goodsync.com/for-linux for the current version and
-  version = "12.9.29";
+  # Taken from the installer's own label ("GoodServer for Unix/Linux version ...").
+  version = "12.11.7.7";
 
+  # The vendor URL is unversioned: when GoodSync publishes a new build this
+  # hash stops matching. To update, bump `version` and replace the hash with
+  # the "got:" value from the failed build (or use lib.fakeHash to get it).
   src = fetchurl {
-    url = "https://www.goodsync.com/download/goodsync.x86_64.deb";
-    # Placeholder. Get the real hash with:
-    #   nix-prefetch-url https://www.goodsync.com/download/goodsync.x86_64.deb
-    # then wrap the result: `nix hash convert --to sri --type sha256 <hash>`
-    # (or just set this to lib.fakeHash, run the build once, and copy the
-    # "got:" hash from the error message).
-    hash = "sha256-t7xXLaK/xmo5uRWHoSLi7Q2iVC6YZTuk1GIBvXtmo0s=";
+    url = "https://www.goodsync.com/download/goodsync-linux-x86_64-release.run";
+    hash = "sha256-ZBXhvQnnOSZ6sh1rj3pXuazMt37Ax2kYqdznvWYEkUg=";
   };
 
   nativeBuildInputs = [
-    dpkg
     autoPatchelfHook
     makeWrapper
+    copyDesktopItems
   ];
 
-  # Runtime libs the GoodSync binaries link against. This is a reasonable
-  # starting guess (it's a C/C++ app that talks TLS to sync servers), but
-  # autoPatchelfHook will list anything still missing when you `nix build`;
-  # add the matching nixpkgs package to this list and rebuild.
+  # `readelf -d` on gsync / gs-server / gscp shows only glibc plus these two:
+  #   libcrypt.so.1 -> libxcrypt-legacy, libgcc_s.so.1 -> stdenv.cc.cc.lib
   buildInputs = [
     stdenv.cc.cc.lib
-    openssl
-    zlib
-    curl
     libxcrypt-legacy
   ];
 
-  # A .deb isn't a normal source tarball, so we unpack it ourselves instead
-  # of using the default unpack phase.
+  # The .run is a Makeself archive. --noexec extracts it without running the
+  # vendor's install-script.sh (which wants root, /usr/bin, systemd, ...).
   unpackPhase = ''
     runHook preUnpack
-    dpkg-deb -x "$src" source
+    sh "$src" --noexec --target ./source
     runHook postUnpack
   '';
-
   sourceRoot = "source";
 
   dontConfigure = true;
   dontBuild = true;
 
+  # Mirrors what install-script.sh does, minus the imperative parts (service
+  # setup, /etc/goodsync, chown) which live in the NixOS module instead.
   installPhase = ''
     runHook preInstall
 
-    mkdir -p "$out"
+    install -Dm755 gsync     $out/bin/gsync
+    install -Dm755 gs-server $out/bin/gs-server
+    install -Dm755 gscp      $out/bin/gs-gscp   # vendor renames it on install
 
-    # Debian packages normally install FHS-style under usr/. Confirm this
-    # after an unpack (dpkg-deb -x goodsync.x86_64.deb /tmp/gs-inspect &&
-    # find /tmp/gs-inspect) — some vendors use /opt/<name> instead, in
-    # which case adjust this to `cp -r opt/goodsync $out` (or similar) and
-    # symlink $out/bin/goodsync to the real binary.
-    if [ -d usr ]; then
-      cp -r usr/* "$out/"
-    else
-      echo "Unexpected .deb layout - inspect ./source and fix installPhase" >&2
-      find . -maxdepth 2
-      exit 1
-    fi
+    # gsync expects this next to the binary (vendor TODO says it'll move)
+    install -Dm644 en-english.rfs $out/bin/en-english.rfs
+
+    # Resources for gs-server (/resources=...). The cert/key are required at
+    # startup; the server runs fine with this directory read-only.
+    mkdir -p $out/share/goodsync-server
+    cp -r html-templates web-res gs-server.crt gs-server.key \
+      $out/share/goodsync-server/
+
+    install -Dm644 html-templates/gslogo64.png $out/share/pixmaps/goodsync.png
 
     runHook postInstall
   '';
 
   postFixup = ''
-    # autoPatchelfHook has already rewritten the ELF interpreter/RPATH by
-    # this point. This wrapper just makes sure goodsync can find xdg-open
-    # (to pop your browser to the Web UI) and basic system tools it may
-    # shell out to.
-    for prog in goodsync gsync gs-server gscp; do
-      if [ -f "$out/bin/$prog" ]; then
-        wrapProgram "$out/bin/$prog" \
-          --prefix PATH : ${lib.makeBinPath [ xdg-utils coreutils gnused gnugrep procps iproute2 ]}
-      fi
-    done
+    # gsync opens your browser with xdg-open
+    wrapProgram $out/bin/gsync \
+      --prefix PATH : ${lib.makeBinPath [ xdg-utils ]}
+
+    # The Debian package ships a `goodsync` command; it is just `gsync /gsweb`
+    # (start the Web UI and open the browser).
+    makeWrapper $out/bin/gsync $out/bin/goodsync --add-flags /gsweb
   '';
 
+  desktopItems = [
+    (makeDesktopItem {
+      name = "goodsync";
+      desktopName = "GoodSync";
+      genericName = "File Synchronization";
+      comment = "File synchronization and backup";
+      exec = "goodsync";
+      icon = "goodsync";
+      terminal = false;
+      categories = [ "Utility" "FileTools" ];
+    })
+  ];
+
   meta = {
-    description = "File synchronization, backup and comparison tool for Linux (CLI + local Web UI)";
+    description = "File synchronization and backup tool (CLI, server and local Web UI)";
     homepage = "https://www.goodsync.com/for-linux";
     license = lib.licenses.unfree;
     platforms = [ "x86_64-linux" ];
