@@ -4,27 +4,27 @@ Unofficial Nix flake packaging [GoodSync for Linux](https://www.goodsync.com/for
 
 GoodSync doesn't ship source or a nixpkgs package, so this repackages their official `.deb` and patches the resulting binaries to run under Nix's non-FHS layout, using `autoPatchelfHook`.
 
-> **Status:** community-maintained, unofficial, not affiliated with GoodSync/Siber Systems. GoodSync itself is proprietary and requires a license (30-day free trial available). This repo only packages and downloads their official binary — it doesn't redistribute it.
+> community-maintained, unofficial, not affiliated with GoodSync/Siber Systems. GoodSync itself is proprietary and requires a license (30-day free trial available). This repo only packages and downloads their official binary — it doesn't redistribute it.
 
 ## Requirements
 
 - Nix with flakes enabled
-- `x86_64-linux` (GoodSync doesn't publish an aarch64 Linux build as of this writing)
-- Unfree packages allowed (see below)
+- `x86_64-linux` (GoodSync doesn't publish an aarch64 Linux build as of this version.
+- Unfree packages allowed
 
 ## Usage
 
 ### Quick try
 
 ```console
-$ nix run github:<you>/goodsync-flake
+$ nix run github:NAXLAB/goodsync-flake
 ```
 
 ### As an input to your system flake
 
 ```nix
 {
-  inputs.goodsync.url = "github:<you>/goodsync-flake";
+  inputs.goodsync.url = "github:NAXLAB/goodsync-flake";
 
   outputs = { self, nixpkgs, goodsync, ... }: {
     nixosConfigurations.yourhost = nixpkgs.lib.nixosSystem {
