@@ -20,8 +20,7 @@
 
       nixosModules.default = { lib, pkgs, ... }: {
         imports = [ ./module.nix ];
-        services.goodsync.package = lib.mkDefault
-          self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+        services.goodsync.package = lib.mkDefault (pkgs.callPackage ./package.nix { });
       };
     };
 }
