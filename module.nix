@@ -82,6 +82,7 @@ in
 
       serviceConfig = {
         User = cfg.user;
+        Group = cfg.user;
         # "+" = run this one as root regardless of User=
         ExecStartPre = [ "+${setupDirs}" "${prepare}" ];
         ExecStart = "${cfg.package}/bin/gs-server /profile=${profile} /resources=${cfg.package}/share/goodsync-server";
