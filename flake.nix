@@ -9,8 +9,10 @@
       pkgs = import nixpkgs { inherit system; };
     in
     {
-      packages.${system}.default = pkgs.callPackage ./package.nix { };
-      packages.${system}.goodsync = self.packages.${system}.default;
+      packages.${system} = {
+        default = pkgs.callPackage ./package.nix { };
+        goodsync = self.packages.${system}.default;
+      };
 
       overlays.default = final: prev: {
         goodsync = final.callPackage ./package.nix { };
