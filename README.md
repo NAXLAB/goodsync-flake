@@ -24,19 +24,23 @@ $ nix run github:NAXLAB/goodsync-flake
 
 ```nix
 {
-  inputs.goodsync.url = "github:NAXLAB/goodsync-flake";
+  inputs = {
+    goodsync = {
+        url                         = "github:NAXLAB/goodsync-flake";
+        inputs.nixpkgs.follows      = "nixpkgs";
+      };
+  };
 
-  outputs = { self, nixpkgs, goodsync, ... }: {
-    nixosConfigurations.yourhost = nixpkgs.lib.nixosSystem {
+  outputs = { nixpkgs, goodsync, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
-        { nixpkgs.overlays = [ goodsync.overlays.default ]; }
-        {
-          nixpkgs.config.allowUnfreePredicate = pkg:
-            builtins.elem (nixpkgs.lib.getName pkg) [ "goodsync" ];
-          environment.systemPackages = [ pkgs.goodsync ];
-        }
         ./configuration.nix
+        {
+          environment.systemPackages = [
+            goodsync.packages.x86_64-linux.default
+          ];
+        }
       ];
     };
   };
