@@ -1,31 +1,21 @@
 {
   description = "GoodSync for Linux, packaged for Nix/NixOS";
 
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
-  };
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachSystem [ "x86_64-linux" ] (system:
-      let
-        pkgs = import nixpkgs {
-          inherit system;
-          config.allowUnfreePredicate = pkg:
-            builtins.elem (nixpkgs.lib.getName pkg) [ "goodsync" ];
-        };
-      in
-      {
-        packages.default = pkgs.callPackage ./package.nix { };
-        packages.goodsync = self.packages.${system}.default;
-      }
-    ) // {
+  outputs = { self, nixpkgs }:
+    let
+      system = "x86_64-linux";
+      pkgs = import nixpkgs { inherit system; };
+    in
+    {
+      packages.${system}.default = pkgs.callPackage ./package.nix { };
+      packages.${system}.goodsync = self.packages.${system}.default;
+
       overlays.default = final: prev: {
         goodsync = final.callPackage ./package.nix { };
       };
 
-      # Defaults services.goodsync.package to this flake's own build, so the
-      # unfree exception above applies and you don't need to allow it yourself.
       nixosModules.default = { lib, pkgs, ... }: {
         imports = [ ./module.nix ];
         services.goodsync.package = lib.mkDefault
