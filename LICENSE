@@ -1,7 +1,5 @@
 MIT License
 
-Copyright (c) 2026 <your name>
-
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
@@ -25,6 +23,6 @@ SOFTWARE.
 Note: this license covers only the Nix packaging code in this repository
 (flake.nix, package.nix, and related files). It does not apply to GoodSync
 itself, which is proprietary software owned by Siber Systems / GoodSync.
-This repository downloads GoodSync's official .deb from goodsync.com at
+This repository downloads GoodSync's official .run from goodsync.com at
 build time and does not redistribute it; you are subject to GoodSync's own
 license and trial/purchase terms when you use it.
