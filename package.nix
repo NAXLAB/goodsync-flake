@@ -7,7 +7,6 @@
 , makeDesktopItem
 , libxcrypt-legacy
 , xdg-utils
-, bash
 , coreutils
 }:
 
@@ -39,9 +38,11 @@ stdenv.mkDerivation (finalAttrs: {
 
   # The .run is a Makeself archive. --noexec extracts it without running the
   # vendor's install-script.sh (which wants root, /usr/bin, systemd, ...).
+  # --nox11/--noprogress just make the extraction itself more robust
+  # headless (no X-detection probe, no progress-bar TTY assumptions).
   unpackPhase = ''
     runHook preUnpack
-    sh "$src" --noexec --target ./source
+    sh "$src" --noexec --nox11 --noprogress --target ./source
     runHook postUnpack
   '';
   sourceRoot = "source";
@@ -54,60 +55,79 @@ stdenv.mkDerivation (finalAttrs: {
   installPhase = ''
     runHook preInstall
 
-    install -Dm755 gsync     $out/bin/gsync
-    install -Dm755 gs-server $out/bin/gs-server
-    install -Dm755 gscp      $out/bin/gs-gscp   # vendor renames it on install
+    # The vendor URL is unversioned (see the comment on `src` above), so a
+    # silent mismatch is possible if a new release lands under the same
+    # filename between when this hash was pinned and when it's rebuilt.
+    # `gs-server` prints its own version string at startup, and it's also
+    # embedded in the binary itself, so check for it here rather than only
+    # discovering a mismatch later at runtime.
+    grep -qa "${finalAttrs.version}" gs-server || {
+      echo "ERROR: gs-server does not contain version string '${finalAttrs.version}'." >&2
+      echo "The vendor likely shipped a new build under the same URL; update 'version' (and 'src.hash') in package.nix." >&2
+      exit 1
+    }
 
-    # gsync expects this next to the binary (vendor TODO says it'll move)
-    install -Dm644 en-english.rfs $out/bin/en-english.rfs
+    # Real binaries + the data file gsync expects next to itself live under
+    # libexec, out of PATH; $out/bin below holds only user-facing commands.
+    install -Dm755 gsync                $out/libexec/goodsync/gsync
+    install -Dm755 gs-server             $out/libexec/goodsync/gs-server
+    install -Dm755 gscp                  $out/libexec/goodsync/gs-gscp   # vendor renames it on install
+    install -Dm644 en-english.rfs        $out/libexec/goodsync/en-english.rfs
 
-    # Resources for gs-server (/resources=...). The cert/key are required at
-    # startup; the module copies this out of the store at runtime since the
-    # Job Server writes its own job-server.key alongside them.
+    # Resources for gs-server (/resources=...). The cert/key are the
+    # vendor's own pair, shipped as-is; the module copies this out of the
+    # store at runtime since the Job Server writes its own job-server.key
+    # alongside them, and the store is read-only.
     mkdir -p $out/share/goodsync-server
     cp -r html-templates web-res gs-server.crt gs-server.key \
       $out/share/goodsync-server/
 
-    install -Dm644 html-templates/gslogo64.png $out/share/pixmaps/goodsync.png
+    install -Dm644 html-templates/gslogo64.png \
+      $out/share/icons/hicolor/64x64/apps/goodsync.png
 
     runHook postInstall
   '';
 
   postFixup = ''
     # gsync opens your browser with xdg-open
-    wrapProgram $out/bin/gsync \
+    wrapProgram $out/libexec/goodsync/gsync \
       --prefix PATH : ${lib.makeBinPath [ xdg-utils ]}
+
+    makeWrapper $out/libexec/goodsync/gsync    $out/bin/gsync
+    makeWrapper $out/libexec/goodsync/gs-server $out/bin/gs-server
+    makeWrapper $out/libexec/goodsync/gs-gscp  $out/bin/gs-gscp
 
     # The Debian package ships a `goodsync` command; it is just `gsync /gsweb`
     # (start the Web UI and open the browser). But gsync's own "am I on a
-    # GUI session" check doesn't succeed in every environment (e.g. no X
-    # libs detected), so instead of opening a browser it just prints the Web
-    # UI URLs and does nothing further -- one URL per bound interface,
-    # including Docker's default bridge (172.17.0.1) if present.
+    # GUI session" check doesn't succeed in every environment, so instead of
+    # opening a browser it just prints one Web UI URL per bound network
+    # interface and does nothing further.
     #
-    # So `goodsync` itself is a small wrapper: stream gsweb's output through
-    # unchanged (so you still see everything gsync normally prints), but
-    # also watch for the first non-Docker https://.../web-ui URL and open it
-    # with xdg-open ourselves.
-    cat > $out/bin/.goodsync-wrapped <<'GOODSYNC_EOF'
-#!${bash}/bin/bash
+    # Rather than guessing which printed IP is the "real" one (Docker
+    # bridges, VPNs, etc. all show up here too, with no way to tell them
+    # apart from the text alone), just read the port -- the one piece of
+    # real information in that output -- from whichever line appears first,
+    # and always open it on 127.0.0.1. Every printed address points at the
+    # same local server, so localhost always works and needs no IP-guessing
+    # logic at all.
+    #
+    # Written straight to $out/bin (not wrapped a second time with
+    # makeWrapper): every external tool it needs is called by its own full
+    # store path below, so there's nothing left for a wrapper to add.
+    cat > $out/bin/goodsync <<GOODSYNC_EOF
+#!${stdenv.shell}
 set -euo pipefail
 opened=0
-${coreutils}/bin/stdbuf -oL "$GOODSYNC_GSYNC" /gsweb | while IFS= read -r line; do
-  echo "$line"
-  if [ "$opened" -eq 0 ] && [[ "$line" =~ https://([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):[0-9]+/web-ui ]]; then
-    ip="''${BASH_REMATCH[1]}"
-    if [ "$ip" != "172.17.0.1" ]; then
-      xdg-open "$line" >/dev/null 2>&1 &
-      opened=1
-    fi
+${coreutils}/bin/stdbuf -oL "$out/libexec/goodsync/gsync" /gsweb | while IFS= read -r line; do
+  printf '%s\n' "\$line"
+  if [ "\$opened" -eq 0 ] && [[ "\$line" =~ https://[0-9.]+:([0-9]+)/web-ui ]]; then
+    port="\''${BASH_REMATCH[1]}"
+    ${xdg-utils}/bin/xdg-open "https://127.0.0.1:\$port/web-ui" >/dev/null 2>&1 &
+    opened=1
   fi
 done
 GOODSYNC_EOF
-    chmod +x $out/bin/.goodsync-wrapped
-    makeWrapper $out/bin/.goodsync-wrapped $out/bin/goodsync \
-      --prefix PATH : ${lib.makeBinPath [ xdg-utils ]} \
-      --set GOODSYNC_GSYNC $out/bin/gsync
+    chmod +x $out/bin/goodsync
   '';
 
   desktopItems = [
