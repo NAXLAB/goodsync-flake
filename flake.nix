@@ -6,7 +6,13 @@
   outputs = { self, nixpkgs }:
     let
       system = "x86_64-linux";
-      pkgs = import nixpkgs { inherit system; };
+      # Scoped to just this one package, so importing this flake doesn't
+      # silently allow unfree software anywhere else on your system.
+      pkgs = import nixpkgs {
+        inherit system;
+        config.allowUnfreePredicate = pkg:
+          builtins.elem (nixpkgs.lib.getName pkg) [ "goodsync" ];
+      };
     in
     {
       packages.${system} = {
@@ -14,13 +20,18 @@
         goodsync = self.packages.${system}.default;
       };
 
+      # For anyone who wants goodsync in their own nixpkgs instance instead
+      # (e.g. to use services.goodsync.package themselves, or just
+      # `pkgs.goodsync` elsewhere) covered by their own allowUnfree.
       overlays.default = final: prev: {
         goodsync = final.callPackage ./package.nix { };
       };
 
-      nixosModules.default = { lib, pkgs, ... }: {
+      # Package already built above with unfree allowed, so enabling the
+      # service needs nothing else from you: no overlay, no allowUnfree.
+      nixosModules.default = { lib, ... }: {
         imports = [ ./module.nix ];
-        services.goodsync.package = lib.mkDefault (pkgs.callPackage ./package.nix { });
+        services.goodsync.package = lib.mkDefault self.packages.${system}.default;
       };
     };
 }
