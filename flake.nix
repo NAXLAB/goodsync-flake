@@ -6,8 +6,6 @@
   outputs = { self, nixpkgs }:
     let
       system = "x86_64-linux";
-      # Scoped to just this one package, so importing this flake doesn't
-      # silently allow unfree software anywhere else on your system.
       pkgs = import nixpkgs {
         inherit system;
         config.allowUnfreePredicate = pkg:
@@ -20,7 +18,7 @@
         goodsync = self.packages.${system}.default;
       };
 
-      # For anyone who wants goodsync in their own nixpkgs instance instead
+      # For anyone who wants goodsync in their own nixpkgs instance instead 
       # (e.g. to use services.goodsync.package themselves, or just
       # `pkgs.goodsync` elsewhere) covered by their own allowUnfree.
       overlays.default = final: prev: {

@@ -3,14 +3,13 @@
 let
   cfg = config.services.goodsync;
 
-  # gsync hardcodes /etc/goodsync/server, so the layout has to match the
-  # vendor installer (this is the "server profile not found" error).
+  # gsync hardcodes /etc/goodsync/server, so the layout has to match the vendor installer
   profileTop = "/etc/goodsync";
   profile = "${profileTop}/server";
-  # Static Web UI assets + certs, copied out of the read-only Nix store so
-  # the Job Server can write its own generated job-server.key alongside them.
+  # Static Web UI assets + certs, copied out of the read-only Nix store so the Job Server 
+  #can write its own generated job-server.key alongside them.
   resources = "${profileTop}/resources";
-  # Job Server's own profile: this is where actual job definitions
+  # Job Server's own profile: this is where job definitions
   # (jobs-groups-options.tix) live. Declared and owned explicitly rather
   # than left to be auto-created implicitly by the Job Server at runtime.
   gsweb = "${profileTop}/gsweb";
@@ -27,6 +26,7 @@ let
     # Job Server generates that file into this same directory at runtime,
     # and it isn't part of the package's own tree, so --exclude leaves it
     # alone regardless of --delete.
+
     ${pkgs.rsync}/bin/rsync -a --delete --chmod=Du=rwx,Fu=rw,go= \
       --exclude=job-server.key \
       ${cfg.package}/share/goodsync-server/ ${resources}/
@@ -37,6 +37,7 @@ let
 
   # Runs as cfg.user, same as the installer does after "Copying server
   # configuration files".
+  
   prepare = pkgs.writeShellScript "goodsync-server-prepare" ''
     set -eu
 
