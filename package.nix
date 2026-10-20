@@ -1,6 +1,8 @@
 { lib
 , stdenv
 , glibc
+, python3
+, writeText
 , fetchurl
 , makeWrapper
 , copyDesktopItems
@@ -14,7 +16,52 @@
 stdenv.mkDerivation (finalAttrs:
 let
   libPath = lib.makeLibraryPath [ glibc stdenv.cc.cc.lib libxcrypt-legacy ];
-  loader = "${glibc}/lib/ld-linux-x86-64.so.2";
+
+  # Points PT_INTERP at a new loader path without moving anything: the string
+  # goes into the zero padding after the first LOAD segment (inside a page the
+  # kernel already maps), and that segment's size is extended to cover it.
+  patchInterp = writeText "patch-interp.py" ''
+    import struct, sys
+
+    path, interp = sys.argv[1], sys.argv[2].encode() + b"\x00"
+    data = bytearray(open(path, "rb").read())
+    if data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+        sys.exit(path + ": not a 64-bit little-endian ELF")
+
+    e_phoff, = struct.unpack_from("<Q", data, 0x20)
+    e_phentsize, e_phnum = struct.unpack_from("<HH", data, 0x36)
+
+    phs = []
+    for i in range(e_phnum):
+        off = e_phoff + i * e_phentsize
+        t, fl, po, pv, pp, fs, ms, al = struct.unpack_from("<IIQQQQQQ", data, off)
+        phs.append(dict(off=off, type=t, offset=po, vaddr=pv, filesz=fs, memsz=ms))
+
+    ip = next(p for p in phs if p["type"] == 3)
+    loads = sorted((p for p in phs if p["type"] == 1), key=lambda p: p["offset"])
+    seg = next(p for p in loads
+               if p["offset"] <= ip["offset"] < p["offset"] + p["filesz"])
+    later = [p for p in loads if p["offset"] > seg["offset"]]
+    if not later or seg["filesz"] != seg["memsz"]:
+        sys.exit(path + ": unexpected segment layout")
+    nxt = later[0]
+
+    start = seg["offset"] + seg["filesz"]
+    end = start + len(interp)
+    vaddr = seg["vaddr"] + seg["filesz"]
+    if end > nxt["offset"] or vaddr + len(interp) > nxt["vaddr"]:
+        sys.exit(path + ": not enough padding for new interpreter path")
+    if any(data[start:end]):
+        sys.exit(path + ": padding is not empty")
+
+    data[start:end] = interp
+    n = seg["filesz"] + len(interp)
+    struct.pack_into("<QQ", data, seg["off"] + 32, n, n)
+    struct.pack_into("<QQQQQ", data, ip["off"] + 8,
+                     start, vaddr, vaddr, len(interp), len(interp))
+    open(path, "wb").write(data)
+    print(path + ": interpreter -> " + sys.argv[2])
+  '';
 in
 {
   
@@ -98,16 +145,23 @@ in
   '';
 
   postFixup = ''
-    mkdir -p $out/bin
+    for bin in gsync gs-server gs-gscp; do
+      ${python3}/bin/python3 ${patchInterp} \
+        "$out/libexec/goodsync/$bin" "${glibc}/lib/ld-linux-x86-64.so.2"
+    done
 
-    # Real binaries stay unmodified in libexec; these launch them via the loader.
-    makeWrapper ${loader} $out/bin/gsync \
-      --add-flags "--library-path ${libPath} $out/libexec/goodsync/gsync" \
+    # Non-fatal smoke test: the vendor's own sanity check, run on the patched binary.
+    LD_LIBRARY_PATH=${libPath} $out/libexec/goodsync/gs-gscp /sanity-check \
+      || echo "WARNING: gscp /sanity-check failed on the patched binary"
+
+    mkdir -p $out/bin
+    makeWrapper $out/libexec/goodsync/gsync $out/bin/gsync \
+      --prefix LD_LIBRARY_PATH : ${libPath} \
       --prefix PATH : ${lib.makeBinPath [ xdg-utils ]}
-    makeWrapper ${loader} $out/bin/gs-server \
-      --add-flags "--library-path ${libPath} $out/libexec/goodsync/gs-server"
-    makeWrapper ${loader} $out/bin/gs-gscp \
-      --add-flags "--library-path ${libPath} $out/libexec/goodsync/gs-gscp"
+    makeWrapper $out/libexec/goodsync/gs-server $out/bin/gs-server \
+      --prefix LD_LIBRARY_PATH : ${libPath}
+    makeWrapper $out/libexec/goodsync/gs-gscp $out/bin/gs-gscp \
+      --prefix LD_LIBRARY_PATH : ${libPath}
 
     cat > $out/bin/goodsync <<GOODSYNC_EOF
 #!${stdenv.shell}
