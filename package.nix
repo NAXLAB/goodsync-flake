@@ -1,7 +1,7 @@
 { lib
 , stdenv
+, glibc
 , fetchurl
-, autoPatchelfHook
 , makeWrapper
 , copyDesktopItems
 , makeDesktopItem
@@ -10,10 +10,17 @@
 , coreutils
 }:
 
-stdenv.mkDerivation (finalAttrs: {
+
+stdenv.mkDerivation (finalAttrs:
+let
+  libPath = lib.makeLibraryPath [ glibc stdenv.cc.cc.lib libxcrypt-legacy ];
+  loader = "${glibc}/lib/ld-linux-x86-64.so.2";
+in
+{
+  
   pname = "goodsync";
   # Taken from the installer's own label ("GoodServer for Unix/Linux version ...").
-  version = "12.11.8";
+  version = "12.11.8.8";
 
   # The vendor URL is unversioned: when GoodSync publishes a new build this
   # hash stops matching. To update, bump `version` and replace the hash with
@@ -24,7 +31,6 @@ stdenv.mkDerivation (finalAttrs: {
   };
 
   nativeBuildInputs = [
-    autoPatchelfHook
     makeWrapper
     copyDesktopItems
   ];
@@ -49,6 +55,9 @@ stdenv.mkDerivation (finalAttrs: {
 
   dontConfigure = true;
   dontBuild = true;
+  dontPatchELF = true;
+  dontAutoPatchelf = true;
+
 
   # Mirrors what install-script.sh does, minus the imperative parts (service
   # setup, /etc/goodsync, chown) which live in the NixOS module instead.
@@ -89,36 +98,22 @@ stdenv.mkDerivation (finalAttrs: {
   '';
 
   postFixup = ''
-    # gsync opens your browser with xdg-open
-    wrapProgram $out/libexec/goodsync/gsync \
+    mkdir -p $out/bin
+
+    # Real binaries stay unmodified in libexec; these launch them via the loader.
+    makeWrapper ${loader} $out/bin/gsync \
+      --add-flags "--library-path ${libPath} $out/libexec/goodsync/gsync" \
       --prefix PATH : ${lib.makeBinPath [ xdg-utils ]}
+    makeWrapper ${loader} $out/bin/gs-server \
+      --add-flags "--library-path ${libPath} $out/libexec/goodsync/gs-server"
+    makeWrapper ${loader} $out/bin/gs-gscp \
+      --add-flags "--library-path ${libPath} $out/libexec/goodsync/gs-gscp"
 
-    makeWrapper $out/libexec/goodsync/gsync    $out/bin/gsync
-    makeWrapper $out/libexec/goodsync/gs-server $out/bin/gs-server
-    makeWrapper $out/libexec/goodsync/gs-gscp  $out/bin/gs-gscp
-
-    # The Debian package ships a `goodsync` command; it is just `gsync /gsweb`
-    # (start the Web UI and open the browser). But gsync's own "am I on a
-    # GUI session" check doesn't succeed in every environment, so instead of
-    # opening a browser it just prints one Web UI URL per bound network
-    # interface and does nothing further.
-    #
-    # Rather than guessing which printed IP is the "real" one (Docker
-    # bridges, VPNs, etc. all show up here too, with no way to tell them
-    # apart from the text alone), just read the port -- the one piece of
-    # real information in that output -- from whichever line appears first,
-    # and always open it on 127.0.0.1. Every printed address points at the
-    # same local server, so localhost always works and needs no IP-guessing
-    # logic at all.
-    #
-    # Written straight to $out/bin (not wrapped a second time with
-    # makeWrapper): every external tool it needs is called by its own full
-    # store path below, so there's nothing left for a wrapper to add.
     cat > $out/bin/goodsync <<GOODSYNC_EOF
 #!${stdenv.shell}
 set -euo pipefail
 opened=0
-${coreutils}/bin/stdbuf -oL "$out/libexec/goodsync/gsync" /gsweb | while IFS= read -r line; do
+${coreutils}/bin/stdbuf -oL "$out/bin/gsync" /gsweb | while IFS= read -r line; do
   printf '%s\n' "\$line"
   if [ "\$opened" -eq 0 ] && [[ "\$line" =~ https://[0-9.]+:([0-9]+)/web-ui ]]; then
     port="\''${BASH_REMATCH[1]}"
