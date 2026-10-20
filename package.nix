@@ -20,7 +20,7 @@ stdenv.mkDerivation (finalAttrs: {
   # the "got:" value from the failed build (or use lib.fakeHash to get it).
   src = fetchurl {
     url = "https://www.goodsync.com/download/goodsync-linux-x86_64-release.run";
-    hash = "sha256-ZBXhvQnnOSZ6sh1rj3pXuazMt37Ax2kYqdznvWYEkUg=";
+    hash = "sha256-31ujLBPLqKvSvdgHykvY/Pj8yg7tL1FmsrsJtLTtIvw=";
   };
 
   nativeBuildInputs = [
