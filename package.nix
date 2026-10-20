@@ -13,7 +13,7 @@
 stdenv.mkDerivation (finalAttrs: {
   pname = "goodsync";
   # Taken from the installer's own label ("GoodServer for Unix/Linux version ...").
-  version = "12.11.7.7";
+  version = "12.11.8";
 
   # The vendor URL is unversioned: when GoodSync publishes a new build this
   # hash stops matching. To update, bump `version` and replace the hash with
