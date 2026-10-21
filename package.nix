@@ -3,13 +3,15 @@
 , glibc
 , python3
 , writeText
-, fetchurl
 , makeWrapper
 , copyDesktopItems
 , makeDesktopItem
 , libxcrypt-legacy
 , xdg-utils
 , coreutils
+  # Supplied by flake.nix (the flake owns where the software comes from).
+, version
+, src
 }:
 
 
@@ -64,18 +66,9 @@ let
   '';
 in
 {
-  
-  pname = "goodsync";
-  # Taken from the installer's own label ("GoodServer for Unix/Linux version ...").
-  version = "12.11.8.8";
 
-  # The vendor URL is unversioned: when GoodSync publishes a new build this
-  # hash stops matching. To update, bump `version` and replace the hash with
-  # the "got:" value from the failed build (or use lib.fakeHash to get it).
-  src = fetchurl {
-    url = "https://www.goodsync.com/download/goodsync-linux-x86_64-release.run";
-    hash = "sha256-31ujLBPLqKvSvdgHykvY/Pj8yg7tL1FmsrsJtLTtIvw=";
-  };
+  pname = "goodsync";
+  inherit version src;
 
   nativeBuildInputs = [
     makeWrapper
@@ -111,15 +104,13 @@ in
   installPhase = ''
     runHook preInstall
 
-    # The vendor URL is unversioned (see the comment on `src` above), so a
-    # silent mismatch is possible if a new release lands under the same
-    # filename between when this hash was pinned and when it's rebuilt.
-    # `gs-server` prints its own version string at startup, and it's also
-    # embedded in the binary itself, so check for it here rather than only
-    # discovering a mismatch later at runtime.
-    grep -qa "${finalAttrs.version}" gs-server || {
+    # `version` is set in flake.nix next to the source hash. gs-server prints
+    # its own version string at startup, and it's also embedded in the binary
+    # itself, so check that it matches `version` here rather than only
+    # discovering a mismatch later at runtime. (-F: dots are literal.)
+    grep -qaF "${finalAttrs.version}" gs-server || {
       echo "ERROR: gs-server does not contain version string '${finalAttrs.version}'." >&2
-      echo "The vendor likely shipped a new build under the same URL; update 'version' (and 'src.hash') in package.nix." >&2
+      echo "The vendor likely shipped a new build under the same URL; update 'version' (and 'src.hash') in flake.nix." >&2
       exit 1
     }
 
