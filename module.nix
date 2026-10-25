@@ -59,6 +59,34 @@ let
         ${profile}/settings.tix
     fi
   '';
+
+  # gs-server's Job Server enumerates network interfaces once at startup and
+  # logs "GsBindStartJobServer: listing interfaces to bind: No network
+  # interfaces" if none are up yet, leaving the Web UI unreachable for a
+  # while even though systemd reports the unit as active.
+  #
+  # network-online.target does not reliably prevent this: with NetworkManager,
+  # NetworkManager-wait-online runs `nm-online -s`, which can return before
+  # any connection exists. So wait here for an actual default route instead.
+  # Bounded, and never fails: on an offline boot the server still starts
+  # (local use keeps working) after the timeout.
+  waitForNetwork = pkgs.writeShellScript "goodsync-server-wait-network" ''
+    ip=${pkgs.iproute2}/bin/ip
+    grep=${pkgs.gnugrep}/bin/grep
+    date=${pkgs.coreutils}/bin/date
+    deadline=$(( $($date +%s) + ${toString cfg.networkWaitTimeout} ))
+
+    while :; do
+      if { "$ip" -4 route show default; "$ip" -6 route show default; } | "$grep" -q .; then
+        exit 0
+      fi
+      if [ "$($date +%s)" -ge "$deadline" ]; then
+        echo "goodsync-server: no default route after ${toString cfg.networkWaitTimeout}s, starting anyway" >&2
+        exit 0
+      fi
+      ${pkgs.coreutils}/bin/sleep 1
+    done
+  '';
 in
 {
   options.services.goodsync = {
@@ -81,6 +109,17 @@ in
         and this user must also be the one running `goodsync`, so that it can
         read the server profile in ${profile}. Must be an existing
         users.users.<name> definition.
+      '';
+    };
+
+    networkWaitTimeout = lib.mkOption {
+      type = lib.types.ints.unsigned;
+      default = 60;
+      description = ''
+        Seconds to wait at startup for a default route before launching
+        gs-server anyway. The Job Server only looks for network interfaces
+        when it starts, so launching before the network is up leaves the Web
+        UI unreachable for a while. Set to 0 to disable the wait.
       '';
     };
   };
@@ -123,8 +162,13 @@ in
         ProtectKernelTunables = true;
         ProtectControlGroups = true;
         # "+" = run this one as root regardless of User=
-        ExecStartPre = [ "+${setupDirs}" "${prepare}" ];
+        ExecStartPre =
+          [ "+${setupDirs}" "${prepare}" ]
+          ++ lib.optional (cfg.networkWaitTimeout > 0) "${waitForNetwork}";
         ExecStart = "${cfg.package}/bin/gs-server /profile=${profile} /resources=${resources}";
+        # Must outlast the network wait plus the other pre-steps, or systemd
+        # kills the unit mid-wait.
+        TimeoutStartSec = cfg.networkWaitTimeout + 60;
         Restart = "on-failure";
         RestartSec = 20;
       };
