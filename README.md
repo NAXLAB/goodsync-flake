@@ -1,4 +1,4 @@
-# goodsync-nix
+# goodsync-flake
 
 A Nix flake that packages [GoodSync for Linux](https://www.goodsync.com/for-linux) (a proprietary file sync/backup tool) from the vendor's `.run` installer, plus a NixOS module that runs the GoodSync server (`gs-server`) as a systemd service backing the local Web UI.
 
