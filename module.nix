@@ -150,7 +150,7 @@ in
 
       serviceConfig = {
         User = cfg.user;
-        # Must match gs-server's hardcoded getgrnam(cfg.user)/setgid(nax)
+        # Must match gs-server's hardcoded getgrnam(cfg.user)/setgid(user)
         # expectation during de-elevation; without this the process starts
         # with the user's real primary group (e.g. "users") and the
         # setgid() call to the "cfg.user" group fails with EPERM.
