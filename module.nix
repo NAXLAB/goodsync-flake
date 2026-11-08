@@ -7,18 +7,27 @@ let
   # vendor installer (this is the "server profile not found" error).
   profileTop = "/etc/goodsync";
   profile = "${profileTop}/server";
+
   # Static Web UI assets + certs, copied out of the read-only Nix store so
   # the Job Server can write its own generated job-server.key alongside them.
   resources = "${profileTop}/resources";
+
   # Job Server's own profile: this is where actual job definitions
   # (jobs-groups-options.tix) live. Declared and owned explicitly rather
   # than left to be auto-created implicitly by the Job Server at runtime.
   gsweb = "${profileTop}/gsweb";
 
-  # Runs as root: create the profile dirs with the right owner, and refresh
-  # the writable copy of the package's static resources on every start.
-  setupDirs = pkgs.writeShellScript "goodsync-server-setup-dirs" ''
+  # Runs as cfg.user (no root needed: systemd's ConfigurationDirectory=
+  # below creates and owns /etc/goodsync). Same job the installer does after
+  # "Copying server configuration files".
+  prepare = pkgs.writeShellScript "goodsync-server-prepare" ''
     set -eu
+
+    # Restrictive modes for the profile directories only. Deliberately NOT
+    # set via UMask= on the unit: that would also apply to every file
+    # gs-server creates while syncing, silently changing the permissions of
+    # the user's synced data.
+    umask 027
     mkdir -p ${profile} ${resources} ${gsweb}
 
     # Mirror the package's static resources (web assets, vendor certs) into
@@ -26,19 +35,11 @@ let
     # newer release don't linger forever. Never touches job-server.key: the
     # Job Server generates that file into this same directory at runtime,
     # and it isn't part of the package's own tree, so --exclude leaves it
-    # alone regardless of --delete.
-    ${pkgs.rsync}/bin/rsync -a --delete --chmod=Du=rwx,Fu=rw,go= \
+    # alone regardless of --delete. Store files are read-only, hence --chmod.
+    ${pkgs.rsync}/bin/rsync -a --no-owner --no-group --delete \
+      --chmod=Du=rwx,Fu=rw,go= \
       --exclude=job-server.key \
       ${cfg.package}/share/goodsync-server/ ${resources}/
-
-    chown -R ${cfg.user}:${cfg.user} ${profileTop}
-    chmod 0750 ${profileTop} ${profile} ${resources} ${gsweb}
-  '';
-
-  # Runs as cfg.user, same as the installer does after "Copying server
-  # configuration files".
-  prepare = pkgs.writeShellScript "goodsync-server-prepare" ''
-    set -eu
 
     # Local server user, needed by `gsync /gsweb`. Only generate it once so
     # restarts don't rotate it. gsync also drops client state in $HOME, so
@@ -52,6 +53,7 @@ let
     # settings.tix doesn't exist until gs-server's first-ever start, so this
     # can't take effect until the *second* start of a fresh install; nothing
     # to do about that without touching gs-server's own file format.
+    # Self-updating can't work inside the Nix store, so switch it off.
     if [ -e ${profile}/settings.tix ]; then
       sed -i \
         -e 's/^CheckNewVersion[[:blank:]]*=.*/CheckNewVersion = No/' \
@@ -68,14 +70,17 @@ let
   # network-online.target does not reliably prevent this: with NetworkManager,
   # NetworkManager-wait-online runs `nm-online -s`, which can return before
   # any connection exists. So wait here for an actual default route instead.
-  # Bounded, and never fails: on an offline boot the server still starts
-  # (local use keeps working) after the timeout.
+  # (A default route is used rather than "any global address": bridges such
+  # as docker0 carry addresses from boot even with no real network.) Bounded,
+  # and never fails: on an offline boot the server still starts (local use
+  # keeps working) after the timeout. A LAN-only machine with no default
+  # route pays the full timeout each boot; set networkWaitTimeout = 0 there.
   waitForNetwork = pkgs.writeShellScript "goodsync-server-wait-network" ''
     ip=${pkgs.iproute2}/bin/ip
     grep=${pkgs.gnugrep}/bin/grep
     date=${pkgs.coreutils}/bin/date
-    deadline=$(( $($date +%s) + ${toString cfg.networkWaitTimeout} ))
 
+    deadline=$(( $($date +%s) + ${toString cfg.networkWaitTimeout} ))
     while :; do
       if { "$ip" -4 route show default; "$ip" -6 route show default; } | "$grep" -q .; then
         exit 0
@@ -132,9 +137,11 @@ in
       }
     ];
 
-    # gs-server internally does getgrnam(cfg.user) to de-elevate; NixOS
-    # doesn't create a same-named group by default, so ensure one exists.
-    users.groups.${cfg.user} = {};
+    # gs-server looks up a group with the same name as its user (getgrnam)
+    # when it drops privileges; NixOS doesn't create a same-named group by
+    # default, so ensure one exists. Side effect: files created by sync jobs
+    # belong to this group rather than the user's usual primary group.
+    users.groups.${cfg.user} = { };
 
     # Gives you the `goodsync` / `gsync` commands and the desktop entry.
     environment.systemPackages = [ cfg.package ];
@@ -150,22 +157,36 @@ in
 
       serviceConfig = {
         User = cfg.user;
-        # Must match gs-server's hardcoded getgrnam(cfg.user)/setgid(user)
-        # expectation during de-elevation; without this the process starts
-        # with the user's real primary group (e.g. "users") and the
-        # setgid() call to the "cfg.user" group fails with EPERM.
+        # Must match gs-server's getgrnam(cfg.user) expectation during
+        # de-elevation; without this the process starts with the user's real
+        # primary group (e.g. "users") and the setgid() to the "cfg.user"
+        # group fails with EPERM.
         Group = cfg.user;
+
+        # systemd creates /etc/goodsync owned by User:Group, so no root-run
+        # setup step (and no recursive chown on every start) is needed.
+        ConfigurationDirectory = "goodsync";
+        ConfigurationDirectoryMode = "0750";
+
         # Cheap hardening: none of these restrict anything gs-server
         # actually needs (it just needs cfg.user's normal file access).
+        # ProtectSystem/ProtectHome are deliberately NOT set, since sync
+        # jobs may read and write anywhere cfg.user can.
         NoNewPrivileges = true;
         PrivateTmp = true;
         ProtectKernelTunables = true;
+        ProtectKernelModules = true;
+        ProtectKernelLogs = true;
         ProtectControlGroups = true;
-        # "+" = run this one as root regardless of User=
-        ExecStartPre =
-          [ "+${setupDirs}" "${prepare}" ]
-          ++ lib.optional (cfg.networkWaitTimeout > 0) "${waitForNetwork}";
+        ProtectClock = true;
+        ProtectHostname = true;
+        LockPersonality = true;
+        RestrictSUIDSGID = true;
+        SystemCallArchitectures = "native";
+
+        ExecStartPre = [ "${prepare}" ] ++ lib.optional (cfg.networkWaitTimeout > 0) "${waitForNetwork}";
         ExecStart = "${cfg.package}/bin/gs-server /profile=${profile} /resources=${resources}";
+
         # Must outlast the network wait plus the other pre-steps, or systemd
         # kills the unit mid-wait.
         TimeoutStartSec = cfg.networkWaitTimeout + 60;
